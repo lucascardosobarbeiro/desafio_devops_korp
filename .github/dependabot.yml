@@ -1,0 +1,31 @@
+---
+# Atualizações semanais reduzem o tempo de exposição a falhas em dependências e imagens-base.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /app
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+
+  - package-ecosystem: docker
+    directory: /app
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
