@@ -4,6 +4,10 @@ global:
   scrape_timeout: 3s
   evaluation_interval: 5s
 
+# Regras versionadas transformam falhas de disponibilidade, erros e latência em alertas consultáveis.
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
 # O primeiro job monitora o próprio Prometheus para diagnosticar o coletor.
 scrape_configs:
   - job_name: prometheus

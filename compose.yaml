@@ -1,6 +1,13 @@
 # Nome fixo evita que recursos recebam prefixos diferentes conforme o diretório de execução.
 name: projeto-korp
 
+# Rotação local impede que logs de demonstrações longas consumam o disco do host.
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # Serviço Go construído previamente pelo Docker ou pelo playbook Ansible.
   http-server-projeto-korp:
@@ -17,6 +24,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Limites evitam que uma falha simples monopolize os recursos do host de demonstração.
+    cpus: "0.50"
+    mem_limit: 128m
+    pids_limit: 100
+    logging: *default-logging
 
   # NGINX é o único ponto de entrada público da aplicação e aguarda o healthcheck do backend.
   nginx:
@@ -44,6 +56,10 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    cpus: "0.50"
+    mem_limit: 128m
+    pids_limit: 100
+    logging: *default-logging
 
   # Prometheus coleta métricas diretamente do serviço pelo DNS interno do Docker.
   prometheus:
@@ -62,12 +78,25 @@ services:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     networks:
       - projeto-korp-network
     read_only: true
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    cpus: "1.00"
+    mem_limit: 512m
+    pids_limit: 200
+    logging: *default-logging
 
   # Grafana recebe datasource e dashboard automaticamente pelos diretórios de provisioning.
   grafana:
@@ -75,12 +104,15 @@ services:
     container_name: grafana
     restart: unless-stopped
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       # A expansão obrigatória impede iniciar o Grafana acidentalmente com senha conhecida.
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no arquivo .env}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # Plugins bundled já vêm na imagem; o instalador em background é incompatível com read_only.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     volumes:
@@ -91,6 +123,22 @@ services:
       - projeto-korp-network
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      # Docker Desktop pode levar cerca de quatro minutos para migrar um volume Grafana vazio.
+      start_period: 300s
+    cpus: "1.00"
+    mem_limit: 512m
+    pids_limit: 300
+    logging: *default-logging
 
 # Volumes nomeados preservam séries históricas e o estado local do Grafana entre reinicializações.
 volumes:

@@ -1,0 +1,38 @@
+---
+# Alertas usam janelas curtas para facilitar a demonstração sem reagir a oscilações instantâneas.
+groups:
+  - name: projeto-korp
+    rules:
+      - alert: ProjetoKorpDown
+        expr: up{job="http-server-projeto-korp"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: HTTP Server Projeto Korp indisponível
+          description: O Prometheus não coleta métricas da aplicação há pelo menos um minuto.
+
+      - alert: ProjetoKorpHighErrorRate
+        expr: >-
+          sum(rate(projeto_korp_http_requests_total{route="/projeto-korp",status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(projeto_korp_http_requests_total{route="/projeto-korp"}[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Taxa elevada de erros no HTTP Server Projeto Korp
+          description: Mais de 5% das requisições resultaram em HTTP 5xx durante cinco minutos.
+
+      - alert: ProjetoKorpHighLatencyP95
+        expr: >-
+          histogram_quantile(0.95,
+          sum by (le) (rate(projeto_korp_http_request_duration_seconds_bucket{route="/projeto-korp"}[5m])))
+          > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Latência p95 elevada no HTTP Server Projeto Korp
+          description: A latência p95 permaneceu acima de 500 ms durante cinco minutos.
