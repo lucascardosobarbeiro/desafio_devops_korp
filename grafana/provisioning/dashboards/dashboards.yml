@@ -1,0 +1,13 @@
+# O provider carrega automaticamente todos os dashboards JSON do diretório montado.
+apiVersion: 1
+
+providers:
+  - name: Projeto Korp
+    orgId: 1
+    folder: Projeto Korp
+    type: file
+    disableDeletion: false
+    editable: false
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards

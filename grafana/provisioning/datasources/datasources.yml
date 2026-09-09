@@ -1,0 +1,14 @@
+# A API de provisioning cria ou atualiza o datasource durante cada inicialização do Grafana.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # O intervalo coincide com o scrape_interval definido no Prometheus.
+      timeInterval: 5s

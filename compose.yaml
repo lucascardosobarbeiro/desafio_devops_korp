@@ -1,0 +1,104 @@
+# Nome fixo evita que recursos recebam prefixos diferentes conforme o diretório de execução.
+name: projeto-korp
+
+services:
+  # Serviço Go construído previamente pelo Docker ou pelo playbook Ansible.
+  http-server-projeto-korp:
+    image: http-server-projeto-korp:${APP_IMAGE_TAG:-1.0.0}
+    container_name: http-server-projeto-korp
+    restart: unless-stopped
+    init: true
+    expose:
+      - "8080"
+    networks:
+      - projeto-korp-network
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # NGINX é o único ponto de entrada público da aplicação e aguarda o healthcheck do backend.
+  nginx:
+    image: nginx:1.30.4-alpine3.24
+    container_name: nginx
+    restart: unless-stopped
+    depends_on:
+      http-server-projeto-korp:
+        condition: service_healthy
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - projeto-korp-network
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Prometheus coleta métricas diretamente do serviço pelo DNS interno do Docker.
+  prometheus:
+    image: prom/prometheus:v3.13.3
+    container_name: prometheus
+    restart: unless-stopped
+    depends_on:
+      http-server-projeto-korp:
+        condition: service_healthy
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    ports:
+      # A interface fica disponível apenas no próprio host para diagnóstico e validação Ansible.
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - projeto-korp-network
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
+  # Grafana recebe datasource e dashboard automaticamente pelos diretórios de provisioning.
+  grafana:
+    image: grafana/grafana:13.2.1
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      # A expansão obrigatória impede iniciar o Grafana acidentalmente com senha conhecida.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no arquivo .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - projeto-korp-network
+    security_opt:
+      - no-new-privileges:true
+
+# Volumes nomeados preservam séries históricas e o estado local do Grafana entre reinicializações.
+volumes:
+  prometheus-data:
+  grafana-data:
+
+# A rede é externa porque sua criação explícita faz parte do desafio e será realizada pelo Ansible.
+networks:
+  projeto-korp-network:
+    name: projeto-korp-network
+    external: true
