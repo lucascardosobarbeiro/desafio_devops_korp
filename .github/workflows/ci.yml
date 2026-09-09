@@ -82,7 +82,7 @@ jobs:
             prom/prometheus:v3.13.3 check rules /etc/prometheus/rules/alerts.yml
 
       - name: Validar JSON do dashboard Grafana
-        run: jq --exit-status empty grafana/dashboards/http-server-projeto-korp-dashboard.json
+        run: jq empty grafana/dashboards/http-server-projeto-korp-dashboard.json
 
   # O syntax-check e o lint detectam módulos obsoletos, variáveis inválidas e problemas de idempotência.
   ansible:
