@@ -1,0 +1,5 @@
+# Infraestrutura Linux deve manter LF mesmo quando o repositório é usado no Windows.
+* text=auto eol=lf
+
+# O PDF local é binário; esta regra evita qualquer tentativa de normalização caso seja incluído no futuro.
+*.pdf binary

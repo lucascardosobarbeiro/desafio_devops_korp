@@ -1,0 +1,61 @@
+# Arquivos de ambiente podem conter senhas, tokens e sobrescritas locais.
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+!*.env.example
+# O template contém apenas nomes de variáveis e precisa acompanhar a role Ansible.
+!ansible/roles/projeto_korp/templates/project.env.j2
+
+# Segredos gerados pelo Ansible e arquivos do Ansible Vault permanecem somente no nó de controle.
+ansible/.secrets/
+**/secrets/
+**/secrets.yml
+**/secrets.yaml
+**/vault.yml
+**/vault.yaml
+*.vault
+*.vault.yml
+*.vault.yaml
+.vault-password*
+vault-password*
+
+# Chaves privadas e keystores nunca devem ser versionados; chaves públicas continuam permitidas.
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+!id_rsa.pub
+!id_ed25519.pub
+
+# Estados de IaC e credenciais locais de ferramentas podem registrar dados sensíveis em texto claro.
+*.tfstate
+*.tfstate.*
+.terraform/
+.kube/config
+.aws/
+.azure/
+.config/gcloud/
+
+# Saídas locais do Ansible e logs podem conter endereços, variáveis ou respostas de serviços.
+*.retry
+*.log
+
+# Saídas de testes e binários Go são reproduzíveis e não precisam ser versionados.
+app/coverage.out
+app/http-server-projeto-korp
+
+# Metadados comuns de IDE e sistema operacional.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# O enunciado original é material de referência local e não faz parte da implementação entregue.
+instruções_desafio_devops.pdf
