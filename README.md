@@ -31,7 +31,9 @@ Todos os containers participam da rede bridge externa `projeto-korp-network`. A 
 | Prometheus | Scrape a cada 5 segundos | Target `http-server-projeto-korp` |
 | Grafana | Datasource e dashboard versionados | Provisioning automático no startup |
 | Ansible | Roles `docker` e `projeto_korp` | Um `ansible-playbook` provisiona tudo |
-| Validação final | `ansible.builtin.uri`, `assert` e `debug` | JSON exibido no console |
+| Alertas | Disponibilidade, erros 5xx e latência p95 | Três regras validadas pelo `promtool` |
+| Validação final | `uri`, `assert` e APIs de observabilidade | Evidências exibidas no console |
+| Integração contínua | Go, Docker, Prometheus, NGINX e Ansible | Workflow GitHub Actions |
 
 ## Endpoints e interfaces
 
@@ -39,7 +41,7 @@ Todos os containers participam da rede bridge externa `projeto-korp-network`. A 
 |---|---|
 | `http://localhost:80/projeto-korp` | Endpoint obrigatório através do NGINX |
 | `http://localhost:80/healthz` | Disponibilidade da aplicação |
-| `http://localhost:80/metrics` | Métricas no formato Prometheus |
+| `http://http-server-projeto-korp:8080/metrics` | Métricas disponíveis somente na rede Docker |
 | `http://localhost:9090` | Prometheus, limitado ao loopback do host |
 | `http://localhost:3000` | Grafana |
 
@@ -137,8 +139,10 @@ O playbook executa os seguintes blocos:
 6. Inicia aplicação, NGINX, Prometheus e Grafana.
 7. Valida o JSON e o horário UTC.
 8. Confirma que o target do Prometheus está `UP`.
-9. Confirma a saúde do Grafana.
-10. Exibe as evidências no console.
+9. Confirma que as três regras de alerta foram carregadas.
+10. Valida a saúde e a conexão do datasource Prometheus no Grafana.
+11. Confirma que o dashboard foi realmente provisionado.
+12. Exibe as evidências no console.
 
 ## Execução manual com Docker
 
@@ -177,7 +181,7 @@ Resposta esperada, com horário diferente a cada chamada:
 
 ## Dashboard e geração de tráfego
 
-Abra `http://localhost:3000/d/http-server-projeto-korp`. O dashboard já existirá na pasta **Projeto Korp**.
+Abra `http://localhost:3000/d/http-server-projeto-korp/http-server-projeto-korp`. O dashboard já existirá na pasta **Projeto Korp**.
 
 Gere tráfego para visualizar o contador e a taxa:
 
@@ -214,6 +218,9 @@ curl http://localhost:8080/projeto-korp
 # Consulta no Prometheus a mesma série usada pelo painel de disponibilidade.
 curl --get --data-urlencode 'query=up{job="http-server-projeto-korp"}' http://localhost:9090/api/v1/query
 
+# Confirma que o grupo de alertas versionado foi carregado.
+curl 'http://localhost:9090/api/v1/rules?type=alert'
+
 # Uma segunda execução comprova a idempotência da automação.
 cd ansible
 ansible-playbook site.yml --ask-become-pass
@@ -233,6 +240,29 @@ up{job="http-server-projeto-korp"}
 ```
 
 Rotas livres ou identificadores de usuário não são usados como labels, evitando crescimento descontrolado da cardinalidade.
+
+## Alertas implementados
+
+As regras ficam em `prometheus/rules/alerts.yml` e são carregadas automaticamente pelo Compose:
+
+- `ProjetoKorpDown`: aplicação sem scrape por pelo menos um minuto.
+- `ProjetoKorpHighErrorRate`: mais de 5% de respostas HTTP 5xx durante cinco minutos.
+- `ProjetoKorpHighLatencyP95`: latência p95 acima de 500 ms durante cinco minutos.
+
+O projeto não define um receiver externo, pois e-mail, Slack ou PagerDuty exigiriam credenciais e destinos específicos. Os alertas ficam visíveis na interface do Prometheus e prontos para integração com Alertmanager.
+
+## Integração contínua
+
+O workflow `.github/workflows/ci.yml` é executado em pushes para `main` e pull requests. Ele valida:
+
+- Testes Go com detector de corrida e cobertura mínima de 50%.
+- `go vet`, compilação e build da imagem final.
+- Sintaxe do Docker Compose e do NGINX.
+- Configuração e regras do Prometheus com `promtool`.
+- JSON do dashboard Grafana.
+- Sintaxe e boas práticas do Ansible com `ansible-lint`.
+
+O Dependabot verifica semanalmente dependências Go, imagens Docker e GitHub Actions.
 
 ## Encerramento e limpeza
 
@@ -255,6 +285,10 @@ docker network rm projeto-korp-network
 - Senhas reais ficam em `.env` ou `ansible/.secrets/`; ambos são ignorados pelo Git.
 - Em ambientes compartilhados, o arquivo local também pode ser substituído por Ansible Vault ou secret manager.
 - Prometheus é publicado exclusivamente em `127.0.0.1`.
+- `/metrics` não é encaminhado pelo NGINX e permanece acessível apenas na rede Docker.
 - A aplicação usa imagem `scratch`, usuário sem privilégios, filesystem somente leitura e nenhuma capability Linux.
+- Prometheus e Grafana removem todas as capabilities Linux; o Grafana também usa filesystem somente leitura.
+- Logs dos quatro serviços possuem rotação de 10 MB e retenção máxima de três arquivos.
+- Todos os serviços possuem limites explícitos de CPU, memória e quantidade de processos.
 - Tags de imagens e dependências foram fixadas para tornar o resultado reproduzível.
 - O socket Docker não é montado em nenhum container.
