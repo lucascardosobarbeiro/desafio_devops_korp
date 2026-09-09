@@ -1,0 +1,13 @@
+---
+# Playbook único exigido pelo desafio: prepara o Linux e entrega todo o ambiente observável.
+- name: Provisionar HTTP Server Projeto Korp
+  hosts: projeto_korp
+  become: true
+  gather_facts: true
+
+  roles:
+    # A primeira role instala Docker Engine, Buildx e o plugin Compose oficial.
+    - role: docker
+
+    # A segunda role copia, constrói, inicia e valida todos os componentes do projeto.
+    - role: projeto_korp

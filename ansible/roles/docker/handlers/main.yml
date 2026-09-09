@@ -1,0 +1,7 @@
+---
+# O handler só reinicia o daemon quando uma alteração de pacote realmente exigir.
+- name: Reiniciar Docker
+  ansible.builtin.service:
+    name: docker
+    state: restarted
+  listen: Reiniciar Docker

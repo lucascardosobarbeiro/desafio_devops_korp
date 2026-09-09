@@ -1,0 +1,180 @@
+---
+# A senha é criada uma única vez no nó de controle e reutilizada nas execuções seguintes.
+# O diretório inteiro está no .gitignore e nunca é copiado para o repositório remoto.
+- name: Criar diretório local protegido para segredos gerados
+  ansible.builtin.file:
+    path: "{{ project_secrets_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# A árvore é criada explicitamente para manter proprietário e permissões determinísticos.
+- name: Criar diretórios de implantação
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ project_deploy_dir }}"
+    - "{{ project_deploy_dir }}/app"
+    - "{{ project_deploy_dir }}/nginx/conf.d"
+    - "{{ project_deploy_dir }}/prometheus"
+    - "{{ project_deploy_dir }}/grafana/dashboards"
+    - "{{ project_deploy_dir }}/grafana/provisioning/datasources"
+    - "{{ project_deploy_dir }}/grafana/provisioning/dashboards"
+
+# O resultado desta cópia decide se a imagem precisa ser reconstruída nesta execução.
+- name: Copiar código e Dockerfile da aplicação
+  ansible.builtin.copy:
+    src: "{{ project_source_root }}/app/"
+    dest: "{{ project_deploy_dir }}/app/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+  register: application_files
+
+# Configurações são copiadas separadamente para deixar claro qual componente será atualizado.
+- name: Copiar configuração do NGINX
+  ansible.builtin.copy:
+    src: "{{ project_source_root }}/nginx/conf.d/"
+    dest: "{{ project_deploy_dir }}/nginx/conf.d/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Copiar configuração do Prometheus
+  ansible.builtin.copy:
+    src: "{{ project_source_root }}/prometheus/"
+    dest: "{{ project_deploy_dir }}/prometheus/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Copiar provisioning e dashboard do Grafana
+  ansible.builtin.copy:
+    src: "{{ project_source_root }}/grafana/"
+    dest: "{{ project_deploy_dir }}/grafana/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Copiar arquivo Docker Compose
+  ansible.builtin.copy:
+    src: "{{ project_source_root }}/compose.yaml"
+    dest: "{{ project_deploy_dir }}/compose.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+
+# O template evita gravar credenciais diretamente no compose.yaml público.
+- name: Gerar variáveis locais do Compose
+  ansible.builtin.template:
+    src: project.env.j2
+    dest: "{{ project_deploy_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# A rede precisa existir antes do Compose porque está declarada como external.
+- name: Criar rede Docker bridge do projeto
+  community.docker.docker_network:
+    name: "{{ docker_network_name }}"
+    driver: bridge
+    state: present
+
+# Se os fontes mudarem, rebuild=always atualiza a tag; sem mudanças, a execução permanece idempotente.
+- name: Construir imagem do HTTP Server
+  community.docker.docker_image_build:
+    name: "{{ app_image_name }}:{{ app_image_tag }}"
+    path: "{{ project_deploy_dir }}/app"
+    pull: true
+    rebuild: "{{ application_files.changed | ternary('always', 'never') }}"
+
+# O módulo Compose v2 cria os quatro containers e espera seus estados antes de continuar.
+- name: Criar e iniciar containers com Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: "{{ project_deploy_dir }}"
+    state: present
+    remove_orphans: true
+    wait: true
+    wait_timeout: 180
+  register: compose_result
+
+# Retries tratam o intervalo entre container running e aplicação realmente pronta.
+- name: Aguardar resposta HTTP através do NGINX
+  ansible.builtin.uri:
+    url: "{{ project_validation_url }}"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: service_response
+  until: service_response.status == 200
+  retries: 20
+  delay: 3
+
+# As asserções comprovam conteúdo exato e timestamp UTC no formato RFC 3339.
+- name: Validar contrato da resposta do serviço
+  ansible.builtin.assert:
+    that:
+      - service_response.json.nome == "Projeto Korp"
+      - service_response.json.horario is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$')
+    fail_msg: "O serviço respondeu, mas o JSON não atende ao contrato do desafio."
+    success_msg: "JSON e horário UTC validados com sucesso."
+
+# Prometheus é publicado somente em loopback para permitir esta validação sem exposição externa.
+- name: Aguardar Prometheus ficar pronto
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ prometheus_port }}/-/ready"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: prometheus_ready
+  until: prometheus_ready.status == 200
+  retries: 20
+  delay: 3
+
+# A consulta up confirma que o Prometheus consegue coletar métricas do serviço pela rede Docker.
+- name: Validar target da aplicação no Prometheus
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:{{ prometheus_port }}/api/v1/query?query={{
+      'up{job="http-server-projeto-korp"}' | urlencode }}
+    method: GET
+    return_content: true
+    status_code: 200
+  register: prometheus_query
+  until:
+    - prometheus_query.status == 200
+    - (prometheus_query.json.data.result | default([]) | length) > 0
+    - prometheus_query.json.data.result[0].value[1] == "1"
+  retries: 20
+  delay: 3
+
+# A API de saúde prova que o Grafana iniciou após carregar seus arquivos de provisioning.
+- name: Aguardar Grafana ficar pronto
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ grafana_port }}/api/health"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: grafana_health
+  until: grafana_health.status == 200
+  retries: 20
+  delay: 3
+
+# O último bloco deixa visível no console a evidência solicitada pelo enunciado.
+- name: Exibir resultado final da validação
+  ansible.builtin.debug:
+    msg:
+      - "Resposta: {{ service_response.json | to_json }}"
+      - "Prometheus target UP: {{ prometheus_query.json.data.result[0].value[1] }}"
+      - "Grafana: http://{{ ansible_host | default(inventory_hostname) }}:{{ grafana_port }}/d/http-server-projeto-korp"
