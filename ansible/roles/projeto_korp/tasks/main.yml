@@ -10,6 +10,15 @@
   become: false
   run_once: true
 
+# A validação falha antes do deploy se o gerador local não entregar uma credencial adequada.
+- name: Validar senha administrativa gerada
+  ansible.builtin.assert:
+    that:
+      - grafana_admin_password | length >= 24
+    fail_msg: "A senha administrativa do Grafana não atende ao tamanho mínimo."
+    quiet: true
+  no_log: true
+
 # A árvore é criada explicitamente para manter proprietário e permissões determinísticos.
 - name: Criar diretórios de implantação
   ansible.builtin.file:
@@ -23,25 +32,28 @@
     - "{{ project_deploy_dir }}/app"
     - "{{ project_deploy_dir }}/nginx/conf.d"
     - "{{ project_deploy_dir }}/prometheus"
+    - "{{ project_deploy_dir }}/prometheus/rules"
     - "{{ project_deploy_dir }}/grafana/dashboards"
+    - "{{ project_deploy_dir }}/grafana/provisioning/alerting"
     - "{{ project_deploy_dir }}/grafana/provisioning/datasources"
     - "{{ project_deploy_dir }}/grafana/provisioning/dashboards"
+    - "{{ project_deploy_dir }}/grafana/provisioning/plugins"
 
 # O resultado desta cópia decide se a imagem precisa ser reconstruída nesta execução.
 - name: Copiar código e Dockerfile da aplicação
   ansible.builtin.copy:
-    src: "{{ project_source_root }}/app/"
+    src: "{{ projeto_korp_source_root }}/app/"
     dest: "{{ project_deploy_dir }}/app/"
     owner: root
     group: root
     mode: "0644"
     directory_mode: "0755"
-  register: application_files
+  register: projeto_korp_application_files
 
 # Configurações são copiadas separadamente para deixar claro qual componente será atualizado.
 - name: Copiar configuração do NGINX
   ansible.builtin.copy:
-    src: "{{ project_source_root }}/nginx/conf.d/"
+    src: "{{ projeto_korp_source_root }}/nginx/conf.d/"
     dest: "{{ project_deploy_dir }}/nginx/conf.d/"
     owner: root
     group: root
@@ -50,7 +62,7 @@
 
 - name: Copiar configuração do Prometheus
   ansible.builtin.copy:
-    src: "{{ project_source_root }}/prometheus/"
+    src: "{{ projeto_korp_source_root }}/prometheus/"
     dest: "{{ project_deploy_dir }}/prometheus/"
     owner: root
     group: root
@@ -59,7 +71,7 @@
 
 - name: Copiar provisioning e dashboard do Grafana
   ansible.builtin.copy:
-    src: "{{ project_source_root }}/grafana/"
+    src: "{{ projeto_korp_source_root }}/grafana/"
     dest: "{{ project_deploy_dir }}/grafana/"
     owner: root
     group: root
@@ -68,7 +80,7 @@
 
 - name: Copiar arquivo Docker Compose
   ansible.builtin.copy:
-    src: "{{ project_source_root }}/compose.yaml"
+    src: "{{ projeto_korp_source_root }}/compose.yaml"
     dest: "{{ project_deploy_dir }}/compose.yaml"
     owner: root
     group: root
@@ -97,7 +109,7 @@
     name: "{{ app_image_name }}:{{ app_image_tag }}"
     path: "{{ project_deploy_dir }}/app"
     pull: true
-    rebuild: "{{ application_files.changed | ternary('always', 'never') }}"
+    rebuild: "{{ projeto_korp_application_files.changed | ternary('always', 'never') }}"
 
 # O módulo Compose v2 cria os quatro containers e espera seus estados antes de continuar.
 - name: Criar e iniciar containers com Docker Compose
@@ -106,27 +118,26 @@
     state: present
     remove_orphans: true
     wait: true
-    wait_timeout: 180
-  register: compose_result
+    wait_timeout: 420
 
 # Retries tratam o intervalo entre container running e aplicação realmente pronta.
 - name: Aguardar resposta HTTP através do NGINX
   ansible.builtin.uri:
-    url: "{{ project_validation_url }}"
+    url: "{{ projeto_korp_validation_url }}"
     method: GET
     return_content: true
     status_code: 200
-  register: service_response
-  until: service_response.status == 200
-  retries: 20
-  delay: 3
+  register: projeto_korp_service_response
+  until: projeto_korp_service_response.status == 200
+  retries: "{{ projeto_korp_validation_retries }}"
+  delay: "{{ projeto_korp_validation_delay }}"
 
 # As asserções comprovam conteúdo exato e timestamp UTC no formato RFC 3339.
 - name: Validar contrato da resposta do serviço
   ansible.builtin.assert:
     that:
-      - service_response.json.nome == "Projeto Korp"
-      - service_response.json.horario is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$')
+      - projeto_korp_service_response.json.nome == "Projeto Korp"
+      - projeto_korp_service_response.json.horario is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$')
     fail_msg: "O serviço respondeu, mas o JSON não atende ao contrato do desafio."
     success_msg: "JSON e horário UTC validados com sucesso."
 
@@ -137,10 +148,10 @@
     method: GET
     return_content: true
     status_code: 200
-  register: prometheus_ready
-  until: prometheus_ready.status == 200
-  retries: 20
-  delay: 3
+  register: projeto_korp_prometheus_ready
+  until: projeto_korp_prometheus_ready.status == 200
+  retries: "{{ projeto_korp_validation_retries }}"
+  delay: "{{ projeto_korp_validation_delay }}"
 
 # A consulta up confirma que o Prometheus consegue coletar métricas do serviço pela rede Docker.
 - name: Validar target da aplicação no Prometheus
@@ -151,13 +162,31 @@
     method: GET
     return_content: true
     status_code: 200
-  register: prometheus_query
+  register: projeto_korp_prometheus_query
   until:
-    - prometheus_query.status == 200
-    - (prometheus_query.json.data.result | default([]) | length) > 0
-    - prometheus_query.json.data.result[0].value[1] == "1"
-  retries: 20
-  delay: 3
+    - projeto_korp_prometheus_query.status == 200
+    - (projeto_korp_prometheus_query.json.data.result | default([]) | length) > 0
+    - projeto_korp_prometheus_query.json.data.result[0].value[1] == "1"
+  retries: "{{ projeto_korp_validation_retries }}"
+  delay: "{{ projeto_korp_validation_delay }}"
+
+# A API de regras comprova que o arquivo de alertas foi montado e interpretado pelo Prometheus.
+- name: Validar regras de alerta no Prometheus
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ prometheus_port }}/api/v1/rules?type=alert"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: projeto_korp_prometheus_rules
+  until:
+    - projeto_korp_prometheus_rules.status == 200
+    - >-
+      projeto_korp_prometheus_rules.json.data.groups
+      | selectattr('name', 'equalto', 'projeto-korp')
+      | list
+      | length > 0
+  retries: "{{ projeto_korp_validation_retries }}"
+  delay: "{{ projeto_korp_validation_delay }}"
 
 # A API de saúde prova que o Grafana iniciou após carregar seus arquivos de provisioning.
 - name: Aguardar Grafana ficar pronto
@@ -166,15 +195,56 @@
     method: GET
     return_content: true
     status_code: 200
-  register: grafana_health
-  until: grafana_health.status == 200
-  retries: 20
-  delay: 3
+  register: projeto_korp_grafana_health
+  until: projeto_korp_grafana_health.status == 200
+  retries: "{{ projeto_korp_validation_retries }}"
+  delay: "{{ projeto_korp_validation_delay }}"
+
+# Esta chamada testa a conexão real Grafana -> Prometheus, não apenas a existência do processo.
+- name: Validar datasource Prometheus provisionado no Grafana
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ grafana_port }}/api/datasources/uid/prometheus/health"
+    method: GET
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+    status_code: 200
+  register: projeto_korp_grafana_datasource
+  until:
+    - projeto_korp_grafana_datasource.status == 200
+    - projeto_korp_grafana_datasource.json.status == "OK"
+  retries: "{{ projeto_korp_validation_retries }}"
+  delay: "{{ projeto_korp_validation_delay }}"
+  no_log: true
+
+# O UID fixo permite provar que o dashboard veio do arquivo versionado e está provisionado.
+- name: Validar dashboard provisionado no Grafana
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:{{ grafana_port
+      }}/api/dashboards/uid/http-server-projeto-korp
+    method: GET
+    url_username: "{{ grafana_admin_user }}"
+    url_password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+    status_code: 200
+  register: projeto_korp_grafana_dashboard
+  until:
+    - projeto_korp_grafana_dashboard.status == 200
+    - projeto_korp_grafana_dashboard.json.dashboard.uid == "http-server-projeto-korp"
+    - projeto_korp_grafana_dashboard.json.meta.provisioned | bool
+  retries: "{{ projeto_korp_validation_retries }}"
+  delay: "{{ projeto_korp_validation_delay }}"
+  no_log: true
 
 # O último bloco deixa visível no console a evidência solicitada pelo enunciado.
 - name: Exibir resultado final da validação
   ansible.builtin.debug:
     msg:
-      - "Resposta: {{ service_response.json | to_json }}"
-      - "Prometheus target UP: {{ prometheus_query.json.data.result[0].value[1] }}"
-      - "Grafana: http://{{ ansible_host | default(inventory_hostname) }}:{{ grafana_port }}/d/http-server-projeto-korp"
+      - "Resposta: {{ projeto_korp_service_response.json | to_json }}"
+      - "Prometheus target UP: {{ projeto_korp_prometheus_query.json.data.result[0].value[1] }}"
+      - "Alertas Prometheus: carregados"
+      - "Dashboard Grafana: provisionado"
+      - "Grafana: http://{{ ansible_host | default(inventory_hostname) }}:{{ grafana_port }}/d/http-server-projeto-korp/http-server-projeto-korp"

@@ -1,6 +1,10 @@
 ---
 # O código-fonte está um nível acima do diretório ansible no nó de controle.
-project_source_root: "{{ playbook_dir }}/.."
+projeto_korp_source_root: "{{ playbook_dir }}/.."
 
 # A URL usa localhost de propósito para executar exatamente o teste pedido no enunciado.
-project_validation_url: "http://127.0.0.1:{{ nginx_port }}/projeto-korp"
+projeto_korp_validation_url: "http://127.0.0.1:{{ nginx_port }}/projeto-korp"
+
+# Um primeiro startup do Grafana pode aplicar muitas migrações; três minutos evitam falsos negativos.
+projeto_korp_validation_retries: 60
+projeto_korp_validation_delay: 3

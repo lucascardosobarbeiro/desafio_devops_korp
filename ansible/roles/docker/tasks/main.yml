@@ -29,6 +29,7 @@
     name:
       - ca-certificates
       - curl
+      - python3-debian
       - python3-requests
     state: present
     update_cache: true
@@ -51,16 +52,31 @@
     group: root
     mode: "0644"
 
-# O codename vem dos fatos do Ubuntu, permitindo Noble, Jammy e versões futuras suportadas.
-- name: Configurar repositório APT oficial do Docker
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [arch={{ docker_apt_architecture }} signed-by=/etc/apt/keyrings/docker.asc]
-      https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
-    filename: docker
-    state: present
-    update_cache: true
+# Remove o formato legado criado por versões anteriores desta role antes de adotar DEB822.
+- name: Remover definição legada do repositório Docker
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
 
+# DEB822 substitui apt_repository e mantém arquitetura, distribuição e chave em campos explícitos.
+- name: Configurar repositório APT oficial do Docker
+  ansible.builtin.deb822_repository:
+    name: docker
+    types:
+      - deb
+    uris:
+      - https://download.docker.com/linux/ubuntu
+    suites:
+      - "{{ ansible_distribution_release }}"
+    components:
+      - stable
+    architectures:
+      - "{{ docker_apt_architecture }}"
+    signed_by: /etc/apt/keyrings/docker.asc
+    state: present
+    mode: "0644"
+
+# A instalação seguinte atualiza o cache que inclui o novo repositório DEB822.
 # Buildx é necessário para docker_image_build; compose-plugin atende ao Compose v2 atual.
 - name: Instalar Docker Engine e plugins oficiais
   ansible.builtin.apt:
@@ -92,11 +108,11 @@
 
 - name: Verificar Docker Compose v2
   ansible.builtin.command: docker compose version --short
-  register: compose_version_result
+  register: docker_compose_version_result
   changed_when: false
 
 - name: Exibir versões instaladas
   ansible.builtin.debug:
     msg:
       - "Docker Engine: {{ docker_version_result.stdout }}"
-      - "Docker Compose: {{ compose_version_result.stdout }}"
+      - "Docker Compose: {{ docker_compose_version_result.stdout }}"
