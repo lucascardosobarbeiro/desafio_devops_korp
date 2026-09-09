@@ -46,6 +46,7 @@ id_ed25519.*
 # Saídas locais do Ansible e logs podem conter endereços, variáveis ou respostas de serviços.
 *.retry
 *.log
+ansible/inventory/*.local.yml
 
 # Saídas de testes e binários Go são reproduzíveis e não precisam ser versionados.
 app/coverage.out
