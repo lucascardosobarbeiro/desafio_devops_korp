@@ -159,10 +159,9 @@ func (app *application) instrument(route string, next http.Handler) http.Handler
 	})
 }
 
-// runHealthcheck usa o próprio binário na instrução HEALTHCHECK, mantendo a imagem final mínima.
-func runHealthcheck() error {
-	client := &http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get(healthcheckTarget)
+// checkHealth separa cliente e endereço para permitir testar sucesso, falha HTTP e erro de rede.
+func checkHealth(client *http.Client, target string) error {
+	response, err := client.Get(target)
 	if err != nil {
 		return err
 	}
@@ -172,6 +171,12 @@ func runHealthcheck() error {
 		return fmt.Errorf("healthcheck retornou status %d", response.StatusCode)
 	}
 	return nil
+}
+
+// runHealthcheck usa o próprio binário na instrução HEALTHCHECK, mantendo a imagem final mínima.
+func runHealthcheck() error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	return checkHealth(client, healthcheckTarget)
 }
 
 // runServer configura métricas de runtime, servidor com timeouts e encerramento gracioso.

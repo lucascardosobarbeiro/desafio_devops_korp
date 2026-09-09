@@ -115,3 +115,90 @@ func TestHealthEMetricas(t *testing.T) {
 		t.Fatalf("métrica esperada não encontrada: %s", expectedMetric)
 	}
 }
+
+// TestRotasOperacionais cobre o healthcheck, método inválido e resposta para rota desconhecida.
+func TestRotasOperacionais(t *testing.T) {
+	handler := newTestHandler(t, time.Now)
+	testCases := []struct {
+		name          string
+		method        string
+		path          string
+		expectedCode  int
+		expectedAllow string
+	}{
+		{name: "health disponível", method: http.MethodGet, path: "/healthz", expectedCode: http.StatusOK},
+		{name: "health rejeita POST", method: http.MethodPost, path: "/healthz", expectedCode: http.StatusMethodNotAllowed, expectedAllow: http.MethodGet},
+		{name: "rota desconhecida", method: http.MethodGet, path: "/nao-existe", expectedCode: http.StatusNotFound},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(testCase.method, testCase.path, nil))
+
+			if response.Code != testCase.expectedCode {
+				t.Fatalf("status inesperado: obtido %d, esperado %d", response.Code, testCase.expectedCode)
+			}
+			if allow := response.Header().Get("Allow"); allow != testCase.expectedAllow {
+				t.Errorf("header Allow inesperado: obtido %q, esperado %q", allow, testCase.expectedAllow)
+			}
+		})
+	}
+}
+
+// TestMetricasDeErro confirma que métodos rejeitados também aparecem com status correto nas métricas.
+func TestMetricasDeErro(t *testing.T) {
+	handler := newTestHandler(t, time.Now)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/projeto-korp", nil))
+
+	metricsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	expectedCounter := `projeto_korp_http_requests_total{method="POST",route="/projeto-korp",status="405"} 1`
+	if !strings.Contains(metricsResponse.Body.String(), expectedCounter) {
+		t.Fatalf("contador de erro esperado não encontrado: %s", expectedCounter)
+	}
+	expectedHistogram := `projeto_korp_http_request_duration_seconds_count{method="POST",route="/projeto-korp",status="405"} 1`
+	if !strings.Contains(metricsResponse.Body.String(), expectedHistogram) {
+		t.Fatalf("histograma de erro esperado não encontrado: %s", expectedHistogram)
+	}
+}
+
+// TestCheckHealth valida o mesmo comportamento usado pelo HEALTHCHECK sem depender da porta 8080.
+func TestCheckHealth(t *testing.T) {
+	testCases := []struct {
+		name          string
+		responseCode  int
+		closeServer   bool
+		expectedError string
+	}{
+		{name: "resposta saudável", responseCode: http.StatusOK},
+		{name: "resposta não saudável", responseCode: http.StatusServiceUnavailable, expectedError: "healthcheck retornou status 503"},
+		{name: "erro de conexão", responseCode: http.StatusOK, closeServer: true, expectedError: "connection refused"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, _ *http.Request) {
+				responseWriter.WriteHeader(testCase.responseCode)
+			}))
+			if testCase.closeServer {
+				server.Close()
+			} else {
+				defer server.Close()
+			}
+
+			err := checkHealth(&http.Client{Timeout: time.Second}, server.URL)
+			if testCase.expectedError == "" {
+				if err != nil {
+					t.Fatalf("healthcheck retornou erro inesperado: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), testCase.expectedError) {
+				t.Fatalf("erro inesperado: obtido %v, esperado conter %q", err, testCase.expectedError)
+			}
+		})
+	}
+}
