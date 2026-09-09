@@ -1,0 +1,6 @@
+# Exclui metadados e artefatos locais do contexto enviado ao daemon Docker.
+.git
+.gitignore
+*.md
+coverage.out
+http-server-projeto-korp
